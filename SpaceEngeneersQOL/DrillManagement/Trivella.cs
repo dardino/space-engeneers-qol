@@ -60,7 +60,7 @@ namespace IngameScript.DrillManagement
     {
       Runtime.UpdateFrequency = UpdateFrequency.Update10;
     }
-    
+
     private float GetReachableCargoFillRatio(VRage.Game.ModAPI.Ingame.IMyInventory referenceInventory)
     {
 
@@ -91,7 +91,7 @@ namespace IngameScript.DrillManagement
     }
 
 
-    private bool CheckExistence(Object entity, IMyTextPanel output, String entityName)
+    private bool CheckExistence(Object entity, IMyTextSurface output, String entityName)
     {
       if (output == null)
       {
@@ -101,7 +101,7 @@ namespace IngameScript.DrillManagement
 
       if (entity == null)
       {
-        output.WriteText($"[color='#FF0000'] entity not found: {entityName}");
+        output.WriteText($"[CFG ERR]: entity not found: {entityName}");
 
         return false;
       }
@@ -114,28 +114,57 @@ namespace IngameScript.DrillManagement
       return rotor.Angle < nextTargetAngle + angleThreshold && rotor.Angle >= nextTargetAngle - angleThreshold;
     }
 
-    private bool TurnOn(IMyTerminalBlock entity)
+    private void TurnOn(IMyTerminalBlock entity)
     {
       if (entity != null)
       {
         entity.ApplyAction("OnOff_On");
-
-        return true;
       }
-
-      return false;
     }
 
-    private bool TurnOff(IMyTerminalBlock entity)
+    private void TurnOnGroup(IMyBlockGroup entities)
     {
-      if (entity != null)
+      if (entities != null)
       {
-        entity.ApplyAction("OnOff_Off");
-
-        return true;
+        var children = new List<IMyTerminalBlock> { };
+        entities.GetBlocks(children);
+        foreach (var block in children)
+        {
+          block.ApplyAction("OnOff_On");
+        }
       }
+    }
 
-      return false;
+    private void TurnOff(IMyTerminalBlock entity)
+    {
+      entity?.ApplyAction("OnOff_Off");
+    }
+    private void TurnOffGroup(IMyBlockGroup entities)
+    {
+      if (entities != null)
+      {
+        var children = new List<IMyTerminalBlock> { };
+        entities.GetBlocks(children);
+        foreach (var block in children)
+        {
+          block.ApplyAction("OnOff_Off");
+        }
+      }
+    }
+
+    private void TurnOffObject(object node) {
+      if (node is IMyBlockGroup) {
+        TurnOffGroup(node as IMyBlockGroup);
+      } else {
+        TurnOff(node as IMyTerminalBlock);
+      }
+    }
+    private void TurnOnObject(object node) {
+      if (node is IMyBlockGroup) {
+        TurnOnGroup(node as IMyBlockGroup);
+      } else {
+        TurnOn(node as IMyTerminalBlock);
+      }
     }
 
     private void IncreaseMaxDistanceAndMove(IMyPistonBase piston)
@@ -144,25 +173,34 @@ namespace IngameScript.DrillManagement
       piston.ApplyAction("Extend");
     }
 
-    private void LogPistonPosition(IMyTextPanel lcd, IMyPistonBase current, List<IMyPistonBase> pistons)
+    private void LogPistonPosition(IMyTextSurface lcd, IMyPistonBase current, List<IMyPistonBase> pistons)
     {
-      pistons.ForEach((piston) =>{
+      pistons.ForEach((piston) =>
+      {
         var currentFlag = current.EntityId == piston.EntityId ? "> " : "";
         lcd.WriteText($"{currentFlag}{piston.CustomName} at {piston.CurrentPosition} / {piston.MaxLimit} | {piston.HighestPosition}\n", true);
       });
+    }
+
+    private bool assertConfig(IMyTextSurface lcd,object pistons,object drills,object rotor,object light) {
+      if (!CheckExistence(pistons, lcd, "Pistons Group")) return false;
+      if (!CheckExistence(drills, lcd, "Drills Group")) return false;
+      if (!CheckExistence(rotor, lcd, "Rotor")) return false;
+      if (!CheckExistence(light, lcd, "Light")) return false;
+      return true;
     }
     public void Main(string argument, UpdateType updateSource)
     {
       var pistons = GridTerminalSystem.GetBlockGroupWithName(PistonGroupName);
       var drills = GridTerminalSystem.GetBlockGroupWithName(DrillsGroupName);
       var rotor = GridTerminalSystem.GetBlockWithName(DrillRotorName) as IMyMotorStator;
-      var light = GridTerminalSystem.GetBlockWithName(DrillDebugLightName);
-      var lcd = GridTerminalSystem.GetBlockWithName(DrillLcdPanelName) as IMyTextPanel ?? Me.GetSurface(0) as IMyTextPanel;
+      object light = GridTerminalSystem.GetBlockWithName(DrillDebugLightName);
+      if (light == null) { light = GridTerminalSystem.GetBlockGroupWithName(DrillDebugLightName); }
+      var lcd = GridTerminalSystem.GetBlockWithName(DrillLcdPanelName) as IMyTextSurface ?? Me.GetSurface(0);
 
-      if (!CheckExistence(pistons, lcd, "Pistons Group")) return;
-      if (!CheckExistence(drills, lcd, "Drills Group")) return;
-      if (!CheckExistence(rotor, lcd, "Rotor")) return;
-      if (!CheckExistence(light, lcd, "Light")) return;
+      if (!assertConfig(lcd, pistons, drills, rotor, light)) return;
+
+      TurnOffObject(light);
 
       var pistonsBlockList = new List<IMyPistonBase> { };
       var drillsBlockList = new List<IMyTerminalBlock> { };
@@ -173,8 +211,6 @@ namespace IngameScript.DrillManagement
       Echo("Pistons Found: " + pistonsBlockList.Count);
       Echo("Drill Found: " + drillsBlockList.Count);
 
-      lcd.SetValue("FontColor", Color.Green);
-
       // select current piston (ordered by the number in the name)
       var sortedPistons = pistonsBlockList
           .Where((pistonBlock) => pistonBlock.MaxLimit < pistonBlock.HighestPosition)
@@ -184,6 +220,7 @@ namespace IngameScript.DrillManagement
       if (sortedPistons.Count == 0)
       {
         Echo("All pistons are fully extended! Exiting.");
+        TurnOnObject(light);
         return;
       }
       var currentPiston = sortedPistons[0];
@@ -207,18 +244,17 @@ namespace IngameScript.DrillManagement
         });
         TurnOn(rotor);
       }
-      Echo("I am here");
 
       if (HasCompletedFullTurn(rotor))
       {
         if (nextTargetAngle == 0) nextTargetAngle = 3.14f;
         else nextTargetAngle = 0;
-        TurnOn(light);
+        TurnOnObject(light);
         IncreaseMaxDistanceAndMove(currentPiston);
       }
       else
       {
-        TurnOff(light);
+        TurnOffObject(light);
       }
 
       lcd.WriteText($"current angle: {rotor.Angle}\n");
@@ -226,7 +262,6 @@ namespace IngameScript.DrillManagement
 
       LogPistonPosition(lcd, currentPiston, pistonsBlockList);
     }
-
     public void Save()
     {
       // Method intentionally left empty.
